@@ -18,7 +18,7 @@ use crate::{
     types::{CommonHash, ProverType, Task, TaskType},
 };
 
-use super::{common::*, darwin::ChunkTaskDetail, CircuitsHandler};
+use super::{common::*, darwin_v2::ChunkTaskDetail, CircuitsHandler};
 // TODO: enable_post_sp1_prover
 // use sp1_prover::Sp1Prover;
 
@@ -153,7 +153,7 @@ impl EuclidHandler {
     }
 
     fn gen_sp1_chunk_proof(&self, task: &crate::types::Task) -> Result<String> {
-        let chunk_trace = self.gen_chunk_traces(task)?;
+        let _ = self.gen_chunk_traces(task)?;
         todo!()
     }
 

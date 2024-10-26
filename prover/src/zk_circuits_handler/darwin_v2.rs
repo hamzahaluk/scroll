@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::types::{CommonHash, Task};
 use std::{cell::RefCell, cmp::Ordering, env, rc::Rc};
 
-use prover_darwin::{
+use prover_darwin_v2::{
     aggregator::Prover as BatchProver,
     check_chunk_hashes,
     common::Prover as CommonProver,
@@ -42,14 +42,14 @@ fn get_block_number(block_trace: &BlockTrace) -> Option<u64> {
 }
 
 #[derive(Default)]
-pub struct DarwinHandler {
+pub struct DarwinV2Handler {
     chunk_prover: Option<RefCell<ChunkProver<'static>>>,
     batch_prover: Option<RefCell<BatchProver<'static>>>,
 
     geth_client: Option<Rc<RefCell<GethClient>>>,
 }
 
-impl DarwinHandler {
+impl DarwinV2Handler {
     pub fn new_multi(
         prover_types: Vec<ProverType>,
         params_dir: &str,
@@ -246,7 +246,7 @@ impl DarwinHandler {
     }
 }
 
-impl CircuitsHandler for DarwinHandler {
+impl CircuitsHandler for DarwinV2Handler {
     fn get_vk(&self, task_type: TaskType) -> Option<Vec<u8>> {
         match task_type {
             TaskType::ChunkHalo2 => self
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_circuits() -> Result<()> {
-        let bi_handler = DarwinHandler::new_multi(
+        let bi_handler = DarwinV2Handler::new_multi(
             vec![ProverType::ChunkHalo2, ProverType::Batch],
             &PARAMS_PATH,
             &ASSETS_PATH,
@@ -328,9 +328,9 @@ mod tests {
         )?;
 
         let chunk_handler = bi_handler;
-        let chunk_vk = chunk_handler.get_vk(TaskType::Chunk).unwrap();
+        let chunk_vk = chunk_handler.get_vk(TaskType::ChunkHalo2).unwrap();
 
-        check_vk(TaskType::Chunk, chunk_vk, "chunk vk must be available");
+        check_vk(TaskType::ChunkHalo2, chunk_vk, "chunk vk must be available");
         let chunk_dir_paths = get_chunk_dir_paths()?;
         log::info!("chunk_dir_paths, {:?}", chunk_dir_paths);
         let mut chunk_traces = vec![];
@@ -438,9 +438,10 @@ mod tests {
     fn read_vk(proof_type: TaskType) -> Result<String> {
         log::info!("read_vk, {:?}", proof_type);
         let vk_file = match proof_type {
-            TaskType::Chunk => CHUNK_VK_PATH.clone(),
+            TaskType::ChunkHalo2 => CHUNK_VK_PATH.clone(),
             TaskType::Batch => BATCH_VK_PATH.clone(),
             TaskType::Bundle => todo!(),
+            TaskType::ChunkSp1 => todo!(),
             TaskType::Undefined => unreachable!(),
         };
 

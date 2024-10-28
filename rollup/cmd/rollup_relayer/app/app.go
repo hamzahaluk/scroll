@@ -14,14 +14,17 @@ import (
 	"github.com/scroll-tech/go-ethereum/log"
 	"github.com/scroll-tech/go-ethereum/rollup/l1"
 	"github.com/urfave/cli/v2"
+	"gorm.io/gorm"
 
 	"scroll-tech/common/database"
 	"scroll-tech/common/observability"
+	"scroll-tech/common/types"
 	"scroll-tech/common/utils"
 	"scroll-tech/common/version"
 	"scroll-tech/rollup/internal/config"
 	"scroll-tech/rollup/internal/controller/relayer"
 	"scroll-tech/rollup/internal/controller/watcher"
+	"scroll-tech/rollup/internal/orm"
 	butils "scroll-tech/rollup/internal/utils"
 )
 
@@ -95,7 +98,7 @@ func action(ctx *cli.Context) error {
 	if cfg.RecoveryConfig.Enable {
 		log.Info("Starting rollup-relayer in recovery mode", "version", version.Version)
 
-		if err = restoreFullPreviousState(cfg, chunkProposer, batchProposer); err != nil {
+		if err = restoreFullPreviousState(cfg, db, chunkProposer, batchProposer, l2watcher); err != nil {
 			log.Crit("failed to restore full previous state", "error", err)
 		}
 
@@ -145,7 +148,7 @@ func Run() {
 	}
 }
 
-func restoreFullPreviousState(cfg *config.Config, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer) error {
+func restoreFullPreviousState(cfg *config.Config, db *gorm.DB, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer, l2Watcher *watcher.L2WatcherClient) error {
 	log.Info("Restoring full previous state with", "L1 block height", cfg.RecoveryConfig.L1BlockHeight, "latest finalized batch", cfg.RecoveryConfig.LatestFinalizedBatch)
 
 	// DB state should be clean: the latest batch in the DB should be finalized on L1. This function will
@@ -159,6 +162,9 @@ func restoreFullPreviousState(cfg *config.Config, chunkProposer *watcher.ChunkPr
 
 	// 1. Get latest finalized batch stored in DB
 	latestDBBatch, err := batchProposer.BatchORM().GetLatestBatch(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get latest batch from DB: %w", err)
+	}
 	fmt.Println("latestDBBatch", latestDBBatch)
 
 	// TODO:
@@ -226,7 +232,7 @@ func restoreFullPreviousState(cfg *config.Config, chunkProposer *watcher.ChunkPr
 			commitEvents.Set(commitEvent.BatchIndex().Uint64(), commitEvent)
 
 		case l1.FinalizeEventType:
-			// TODO: this needs to be the same as in d
+			// TODO: this needs to be the same as in da syncer
 			finalizeEvent := event.(*l1.FinalizeBatchEvent)
 			commitEvent, exists := commitEvents.Get(finalizeEvent.BatchIndex().Uint64())
 			if !exists {
@@ -261,32 +267,148 @@ func restoreFullPreviousState(cfg *config.Config, chunkProposer *watcher.ChunkPr
 	}
 
 	// 5. Process all finalized batches: fetch L2 blocks and reproduce chunks and batches.
+	count = 0
+	//var prev uint64
 	for batchEventsHeap.Len() > 0 {
 		nextBatch := batchEventsHeap.Pop().Value()
+		fmt.Println("nextBatch", nextBatch.commit.BatchIndex(), nextBatch.commit.BatchHash(), nextBatch.finalize.BatchIndex(), nextBatch.finalize.BatchHash())
+		//fmt.Println("nextBatch", nextBatch.commit.BatchIndex(), nextBatch.commit.BatchHash(), nextBatch.finalize.BatchIndex(), nextBatch.finalize.BatchHash())
+		//if prev == nextBatch.commit.BatchIndex().Uint64() {
+		//	fmt.Println("prev == nextBatch.commit.BatchIndex().Uint64()")
+		//	continue
+		//}
+		//
+		//prev = nextBatch.commit.BatchIndex().Uint64()
+		//if err = processFinalizedBatch(db, reader, nextBatch, chunkProposer, batchProposer, l2Watcher); err != nil {
+		//	return fmt.Errorf("failed to process finalized batch %d %s: %w", nextBatch.commit.BatchIndex(), nextBatch.commit.BatchHash(), err)
+		//}
 
-		// 5.1. Fetch commit tx data for batch (via commit event).
-		args, err := reader.FetchCommitTxData(nextBatch.commit)
+		//log.Info("Processed finalized batch", "batch", nextBatch.commit.BatchIndex(), "hash", nextBatch.commit.BatchHash())
+
+		//count++
+		//if count >= 10 {
+		//	break
+		//}
+	}
+
+	return nil
+}
+
+func processFinalizedBatch(db *gorm.DB, reader *l1.Reader, nextBatch *batchEvents, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer, l2Watcher *watcher.L2WatcherClient) error {
+	log.Info("Processing finalized batch", "batch", nextBatch.commit.BatchIndex(), "hash", nextBatch.commit.BatchHash())
+
+	// 5.1. Fetch commit tx data for batch (via commit event).
+	args, err := reader.FetchCommitTxData(nextBatch.commit)
+	if err != nil {
+		return fmt.Errorf("failed to fetch commit tx data: %w", err)
+	}
+
+	codec, err := encoding.CodecFromVersion(encoding.CodecVersion(args.Version))
+	if err != nil {
+		return fmt.Errorf("failed to get codec: %w", err)
+	}
+
+	daChunksRawTxs, err := codec.DecodeDAChunksRawTx(args.Chunks)
+	if err != nil {
+		return fmt.Errorf("failed to decode DA chunks: %w", err)
+	}
+	lastChunk := daChunksRawTxs[len(daChunksRawTxs)-1]
+	lastBlockInBatch := lastChunk.Blocks[len(lastChunk.Blocks)-1].Number()
+
+	log.Info("Fetching L2 blocks from l2geth", "batch", nextBatch.commit.BatchIndex(), "last L2 block in batch", lastBlockInBatch)
+
+	// 5.2. Fetch L2 blocks for the entire batch.
+	if err = l2Watcher.TryFetchRunningMissingBlocks(lastBlockInBatch); err != nil {
+		return fmt.Errorf("failed to fetch L2 blocks: %w", err)
+	}
+
+	// 5.3. Reproduce chunks.
+	daChunks := make([]*encoding.Chunk, 0, len(daChunksRawTxs))
+	dbChunks := make([]*orm.Chunk, 0, len(daChunksRawTxs))
+	for _, daChunkRawTxs := range daChunksRawTxs {
+		start := daChunkRawTxs.Blocks[0].Number()
+		end := daChunkRawTxs.Blocks[len(daChunkRawTxs.Blocks)-1].Number()
+
+		blocks, err := l2Watcher.BlockORM().GetL2BlocksInRange(context.Background(), start, end)
 		if err != nil {
-			return fmt.Errorf("failed to fetch commit tx data: %w", err)
+			return fmt.Errorf("failed to get L2 blocks in range: %w", err)
 		}
 
-		codec, err := encoding.CodecFromVersion(encoding.CodecVersion(args.Version))
-		if err != nil {
-			return fmt.Errorf("failed to get codec: %w", err)
+		log.Info("Reproducing chunk", "start block", start, "end block", end)
+
+		var chunk encoding.Chunk
+		for _, block := range blocks {
+			chunk.Blocks = append(chunk.Blocks, block)
 		}
 
-		daChunksRawTxs, err := codec.DecodeDAChunksRawTx(args.Chunks)
+		metrics, err := butils.CalculateChunkMetrics(&chunk, codec.Version())
 		if err != nil {
-			return fmt.Errorf("failed to decode DA chunks: %w", err)
+			return fmt.Errorf("failed to calculate chunk metrics: %w", err)
 		}
-		lastChunk := daChunksRawTxs[len(daChunksRawTxs)-1]
-		lastBlockInBatch := lastChunk.Blocks[len(lastChunk.Blocks)-1].Number()
 
-		log.Info("Last L2 block in batch", "batch", nextBatch.commit.BatchIndex(), "L2 block", lastBlockInBatch)
+		err = db.Transaction(func(dbTX *gorm.DB) error {
+			dbChunk, err := chunkProposer.ChunkORM().InsertChunk(context.Background(), &chunk, codec.Version(), *metrics, dbTX)
+			if err != nil {
+				return fmt.Errorf("failed to insert chunk to DB: %w", err)
+			}
+			if err := l2Watcher.BlockORM().UpdateChunkHashInRange(context.Background(), dbChunk.StartBlockNumber, dbChunk.EndBlockNumber, dbChunk.Hash, dbTX); err != nil {
+				return fmt.Errorf("failed to update chunk_hash for l2_blocks (chunk hash: %s, start block: %d, end block: %d): %w", dbChunk.Hash, dbChunk.StartBlockNumber, dbChunk.EndBlockNumber, err)
+			}
 
-		// 5.2. Fetch L2 blocks for each chunk.
-		// re-create encoding.Chunk and call InsertChunk
-		// same with encoding.Batch and call InsertBatch
+			if err = chunkProposer.ChunkORM().UpdateProvingStatus(context.Background(), dbChunk.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+				return fmt.Errorf("failed to update proving status for chunk %s: %w", dbChunk.Hash, err)
+			}
+
+			daChunks = append(daChunks, &chunk)
+			dbChunks = append(dbChunks, dbChunk)
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to insert chunk in DB transaction: %w", err)
+		}
+	}
+
+	// 5.4 Reproduce batch.
+	dbParentBatch, err := batchProposer.BatchORM().GetLatestBatch(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get latest batch from DB: %w", err)
+	}
+
+	var batch encoding.Batch
+	batch.Index = dbParentBatch.Index + 1
+	batch.ParentBatchHash = common.HexToHash(dbParentBatch.Hash)
+	batch.TotalL1MessagePoppedBefore = dbChunks[0].TotalL1MessagesPoppedBefore
+
+	for _, chunk := range daChunks {
+		batch.Chunks = append(batch.Chunks, chunk)
+	}
+
+	metrics, err := butils.CalculateBatchMetrics(&batch, codec.Version())
+	if err != nil {
+		return fmt.Errorf("failed to calculate batch metrics: %w", err)
+	}
+
+	err = db.Transaction(func(dbTX *gorm.DB) error {
+		dbBatch, err := batchProposer.BatchORM().InsertBatch(context.Background(), &batch, codec.Version(), *metrics, dbTX)
+		if err != nil {
+			return fmt.Errorf("failed to insert batch to DB: %w", err)
+		}
+		if err = chunkProposer.ChunkORM().UpdateBatchHashInRange(context.Background(), dbBatch.StartChunkIndex, dbBatch.EndChunkIndex, dbBatch.Hash, dbTX); err != nil {
+			return fmt.Errorf("failed to update batch_hash for chunks (batch hash: %s, start chunk: %d, end chunk: %d): %w", dbBatch.Hash, dbBatch.StartChunkIndex, dbBatch.EndChunkIndex, err)
+		}
+
+		if err = batchProposer.BatchORM().UpdateProvingStatus(context.Background(), dbBatch.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+			return fmt.Errorf("failed to update proving status for batch %s: %w", dbBatch.Hash, err)
+		}
+		if err = batchProposer.BatchORM().UpdateRollupStatusCommitAndFinalizeTxHash(context.Background(), dbBatch.Hash, types.RollupFinalized, nextBatch.commit.TxHash().Hex(), nextBatch.finalize.TxHash().Hex(), dbTX); err != nil {
+			return fmt.Errorf("failed to update rollup status for batch %s: %w", dbBatch.Hash, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to insert batch in DB transaction: %w", err)
 	}
 
 	return nil

@@ -417,6 +417,29 @@ func (o *Batch) UpdateProvingStatus(ctx context.Context, hash string, status typ
 	return nil
 }
 
+func (o *Batch) UpdateRollupStatusCommitAndFinalizeTxHash(ctx context.Context, hash string, status types.RollupStatus, commitTxHash string, finalizeTxHash string, dbTX ...*gorm.DB) error {
+	updateFields := make(map[string]interface{})
+	updateFields["commit_tx_hash"] = commitTxHash
+	updateFields["committed_at"] = utils.NowUTC()
+	updateFields["finalize_tx_hash"] = finalizeTxHash
+	updateFields["finalized_at"] = time.Now()
+
+	updateFields["rollup_status"] = int(status)
+
+	db := o.db
+	if len(dbTX) > 0 && dbTX[0] != nil {
+		db = dbTX[0]
+	}
+	db = db.WithContext(ctx)
+	db = db.Model(&Batch{})
+	db = db.Where("hash", hash)
+
+	if err := db.Updates(updateFields).Error; err != nil {
+		return fmt.Errorf("Batch.UpdateRollupStatusCommitAndFinalizeTxHash error: %w, batch hash: %v, status: %v, commitTxHash: %v, finalizeTxHash: %v", err, hash, status.String(), commitTxHash, finalizeTxHash)
+	}
+	return nil
+}
+
 // UpdateRollupStatus updates the rollup status of a batch.
 func (o *Batch) UpdateRollupStatus(ctx context.Context, hash string, status types.RollupStatus, dbTX ...*gorm.DB) error {
 	updateFields := make(map[string]interface{})

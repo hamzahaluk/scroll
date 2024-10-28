@@ -60,13 +60,18 @@ func NewL2WatcherClient(ctx context.Context, client *ethclient.Client, confirmat
 
 const blocksFetchLimit = uint64(10)
 
+func (w *L2WatcherClient) BlockORM() *orm.L2Block {
+	return w.l2BlockOrm
+}
+
 // TryFetchRunningMissingBlocks attempts to fetch and store block traces for any missing blocks.
-func (w *L2WatcherClient) TryFetchRunningMissingBlocks(blockHeight uint64) {
+func (w *L2WatcherClient) TryFetchRunningMissingBlocks(blockHeight uint64) error {
 	w.metrics.fetchRunningMissingBlocksTotal.Inc()
 	heightInDB, err := w.l2BlockOrm.GetL2BlocksLatestHeight(w.ctx)
+	fmt.Println("heightInDB", heightInDB)
 	if err != nil {
 		log.Error("failed to GetL2BlocksLatestHeight", "err", err)
-		return
+		return fmt.Errorf("failed to GetL2BlocksLatestHeight: %w", err)
 	}
 
 	// Fetch and store block traces for missing blocks
@@ -79,11 +84,13 @@ func (w *L2WatcherClient) TryFetchRunningMissingBlocks(blockHeight uint64) {
 
 		if err = w.GetAndStoreBlocks(w.ctx, from, to); err != nil {
 			log.Error("fail to getAndStoreBlockTraces", "from", from, "to", to, "err", err)
-			return
+			return fmt.Errorf("fail to getAndStoreBlockTraces: %w", err)
 		}
 		w.metrics.fetchRunningMissingBlocksHeight.Set(float64(to))
 		w.metrics.rollupL2BlocksFetchedGap.Set(float64(blockHeight - to))
 	}
+
+	return nil
 }
 
 func txsToTxsData(txs gethTypes.Transactions) []*gethTypes.TransactionData {

@@ -68,7 +68,6 @@ func (w *L2WatcherClient) BlockORM() *orm.L2Block {
 func (w *L2WatcherClient) TryFetchRunningMissingBlocks(blockHeight uint64) error {
 	w.metrics.fetchRunningMissingBlocksTotal.Inc()
 	heightInDB, err := w.l2BlockOrm.GetL2BlocksLatestHeight(w.ctx)
-	fmt.Println("heightInDB", heightInDB)
 	if err != nil {
 		log.Error("failed to GetL2BlocksLatestHeight", "err", err)
 		return fmt.Errorf("failed to GetL2BlocksLatestHeight: %w", err)

@@ -86,6 +86,10 @@ func NewBundleProposer(ctx context.Context, cfg *config.BundleProposerConfig, ch
 	return p
 }
 
+func (p *BundleProposer) BundleORM() *orm.Bundle {
+	return p.bundleOrm
+}
+
 // TryProposeBundle tries to propose a new bundle.
 func (p *BundleProposer) TryProposeBundle() {
 	p.bundleProposerCircleTotal.Inc()

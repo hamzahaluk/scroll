@@ -10,8 +10,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/scroll-tech/go-ethereum/accounts/abi"
-	"github.com/scroll-tech/go-ethereum/common"
-	"github.com/scroll-tech/go-ethereum/crypto"
 	"github.com/scroll-tech/go-ethereum/log"
 	"github.com/scroll-tech/go-ethereum/params"
 	"gorm.io/gorm"
@@ -23,6 +21,7 @@ import (
 	"scroll-tech/rollup/internal/config"
 	"scroll-tech/rollup/internal/controller/sender"
 	"scroll-tech/rollup/internal/orm"
+	rutils "scroll-tech/rollup/internal/utils"
 )
 
 // Layer1Relayer is responsible for updating L1 gas price oracle contract on L2.
@@ -54,18 +53,13 @@ type Layer1Relayer struct {
 // NewLayer1Relayer will return a new instance of Layer1RelayerClient
 func NewLayer1Relayer(ctx context.Context, db *gorm.DB, cfg *config.RelayerConfig, chainCfg *params.ChainConfig, serviceType ServiceType, reg prometheus.Registerer) (*Layer1Relayer, error) {
 	var gasOracleSender *sender.Sender
+	var err error
 
 	switch serviceType {
 	case ServiceTypeL1GasOracle:
-		pKey, err := crypto.ToECDSA(common.FromHex(cfg.GasOracleSenderPrivateKey))
+		gasOracleSender, err = sender.NewSender(ctx, cfg.SenderConfig, cfg.GasOracleSenderSignerConfig, "l1_relayer", "gas_oracle_sender", types.SenderTypeL1GasOracle, db, reg)
 		if err != nil {
-			return nil, fmt.Errorf("new gas oracle sender failed, err: %v", err)
-		}
-
-		gasOracleSender, err = sender.NewSender(ctx, cfg.SenderConfig, pKey, "l1_relayer", "gas_oracle_sender", types.SenderTypeL1GasOracle, db, reg)
-		if err != nil {
-			addr := crypto.PubkeyToAddress(pKey.PublicKey)
-			return nil, fmt.Errorf("new gas oracle sender failed for address %s, err: %v", addr.Hex(), err)
+			return nil, fmt.Errorf("new gas oracle sender failed, err: %w", err)
 		}
 
 		// Ensure test features aren't enabled on the scroll mainnet.
@@ -156,6 +150,31 @@ func (r *Layer1Relayer) ProcessGasPriceOracle() {
 			baseFee = uint64(math.Ceil(r.l1BaseFeeWeight*float64(block.BaseFee) + r.l1BlobBaseFeeWeight*float64(block.BlobBaseFee)))
 		} else {
 			baseFee = block.BaseFee
+		}
+
+		// include the token exchange rate in the fee data if alternative gas token enabled
+		if r.cfg.GasOracleConfig.AlternativeGasTokenConfig != nil && r.cfg.GasOracleConfig.AlternativeGasTokenConfig.Enabled {
+			// The exchange rate represent the number of native token on L1 required to exchange for 1 native token on L2.
+			var exchangeRate float64
+			switch r.cfg.GasOracleConfig.AlternativeGasTokenConfig.Mode {
+			case "Fixed":
+				exchangeRate = r.cfg.GasOracleConfig.AlternativeGasTokenConfig.FixedExchangeRate
+			case "BinanceApi":
+				exchangeRate, err = rutils.GetExchangeRateFromBinanceApi(r.cfg.GasOracleConfig.AlternativeGasTokenConfig.TokenSymbolPair, 5)
+				if err != nil {
+					log.Error("Failed to get gas token exchange rate from Binance api", "tokenSymbolPair", r.cfg.GasOracleConfig.AlternativeGasTokenConfig.TokenSymbolPair, "err", err)
+					return
+				}
+			default:
+				log.Error("Invalid alternative gas token mode", "mode", r.cfg.GasOracleConfig.AlternativeGasTokenConfig.Mode)
+				return
+			}
+			if exchangeRate == 0 {
+				log.Error("Invalid exchange rate", "exchangeRate", exchangeRate)
+				return
+			}
+			baseFee = uint64(math.Ceil(float64(baseFee) / exchangeRate))
+			blobBaseFee = uint64(math.Ceil(float64(blobBaseFee) / exchangeRate))
 		}
 
 		if r.shouldUpdateGasOracle(baseFee, blobBaseFee, isCurie) {

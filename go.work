@@ -7,4 +7,5 @@ use (
 	./database
 	./rollup
 	./tests/integration-test
+	//../go-ethereum
 )

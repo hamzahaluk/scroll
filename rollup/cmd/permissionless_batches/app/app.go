@@ -82,6 +82,7 @@ func action(ctx *cli.Context) error {
 	fmt.Println(cfg.DBConfig)
 	fmt.Println(cfg.RecoveryConfig)
 
+	// TODO: also allow to skip this step and persist DB in case this crashes when waiting for proof?
 	// Restore minimal previous state required to be able to create new chunks, batches and bundles.
 	latestFinalizedChunk, latestFinalizedBatch, err := restoreMinimalPreviousState(cfg, chunkProposer, batchProposer)
 	if err != nil {
@@ -300,12 +301,15 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 	log.Info("Last L2 block in batch", "batch", batchCommitEvent.BatchIndex(), "L2 block", lastBlockInBatch)
 
 	// 4. Get the L1 messages count after the latest finalized batch.
-	l1MessagesCount, err := reader.FinalizedL1MessageQueueIndex(latestFinalizedL1Block)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get L1 messages count: %w", err)
+	var l1MessagesCount uint64
+	if cfg.RecoveryConfig.ForceL1MessageCount == 0 {
+		l1MessagesCount, err = reader.FinalizedL1MessageQueueIndex(latestFinalizedL1Block)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get L1 messages count: %w", err)
+		}
+	} else {
+		l1MessagesCount = cfg.RecoveryConfig.ForceL1MessageCount
 	}
-	// TODO: remove this. only for testing
-	l1MessagesCount = 220853
 
 	log.Info("L1 messages count after latest finalized batch", "batch", batchCommitEvent.BatchIndex(), "count", l1MessagesCount)
 
@@ -326,10 +330,3 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 
 	return chunk, batch, nil
 }
-
-//docker run --rm -it \
-// -e POSTGRES_HOST_AUTH_METHOD=trust \
-// -e POSTGRES_DB=scroll \
-// -v ${PWD}/db_data:/var/lib/postgresql/data \
-// -p 5432:5432 \
-// postgres

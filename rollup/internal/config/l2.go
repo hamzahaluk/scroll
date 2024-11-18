@@ -51,6 +51,5 @@ type BatchProposerConfig struct {
 
 // BundleProposerConfig loads bundle_proposer configuration items.
 type BundleProposerConfig struct {
-	MaxBatchNumPerBundle uint64 `json:"max_batch_num_per_bundle"`
-	BundleTimeoutSec     uint64 `json:"bundle_timeout_sec"`
+	BatchNumPerBundle uint64 `json:"batch_num_per_bundle"`
 }

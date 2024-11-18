@@ -23,33 +23,33 @@ import (
 func testBundleProposerLimits(t *testing.T) {
 	tests := []struct {
 		name                         string
-		maxBatchNumPerBundle         uint64
+		batchNumPerBundle            uint64
 		bundleTimeoutSec             uint64
 		expectedBundlesLen           int
 		expectedBatchesInFirstBundle uint64 // only be checked when expectedBundlesLen > 0
 	}{
 		{
-			name:                 "NoLimitReached",
-			maxBatchNumPerBundle: math.MaxUint64,
-			bundleTimeoutSec:     math.MaxUint32,
-			expectedBundlesLen:   0,
+			name:               "NoLimitReached",
+			batchNumPerBundle:  math.MaxUint64,
+			bundleTimeoutSec:   math.MaxUint32,
+			expectedBundlesLen: 0,
 		},
 		{
 			name:                         "Timeout",
-			maxBatchNumPerBundle:         math.MaxUint64,
+			batchNumPerBundle:            math.MaxUint64,
 			bundleTimeoutSec:             0,
 			expectedBundlesLen:           1,
 			expectedBatchesInFirstBundle: 2,
 		},
 		{
-			name:                 "maxBatchNumPerBundleIs0",
-			maxBatchNumPerBundle: 0,
-			bundleTimeoutSec:     math.MaxUint32,
-			expectedBundlesLen:   0,
+			name:               "maxBatchNumPerBundleIs0",
+			batchNumPerBundle:  0,
+			bundleTimeoutSec:   math.MaxUint32,
+			expectedBundlesLen: 0,
 		},
 		{
 			name:                         "maxBatchNumPerBundleIs1",
-			maxBatchNumPerBundle:         1,
+			batchNumPerBundle:            1,
 			bundleTimeoutSec:             math.MaxUint32,
 			expectedBundlesLen:           1,
 			expectedBatchesInFirstBundle: 1,
@@ -115,8 +115,7 @@ func testBundleProposerLimits(t *testing.T) {
 			bap.TryProposeBatch() // batch2 contains chunk2
 
 			bup := NewBundleProposer(context.Background(), &config.BundleProposerConfig{
-				MaxBatchNumPerBundle: tt.maxBatchNumPerBundle,
-				BundleTimeoutSec:     tt.bundleTimeoutSec,
+				BatchNumPerBundle: tt.batchNumPerBundle,
 			}, chainConfig, db, nil)
 
 			bup.TryProposeBundle()
@@ -205,8 +204,7 @@ func testBundleProposerRespectHardforks(t *testing.T) {
 	}
 
 	bup := NewBundleProposer(context.Background(), &config.BundleProposerConfig{
-		MaxBatchNumPerBundle: math.MaxUint64,
-		BundleTimeoutSec:     0,
+		BatchNumPerBundle: math.MaxUint64,
 	}, chainConfig, db, nil)
 
 	for i := 0; i < 5; i++ {

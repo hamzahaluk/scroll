@@ -3,7 +3,6 @@ package watcher
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -25,8 +24,7 @@ type BundleProposer struct {
 	batchOrm  *orm.Batch
 	bundleOrm *orm.Bundle
 
-	maxBatchNumPerBundle uint64
-	bundleTimeoutSec     uint64
+	batchNumPerBundle uint64
 
 	chainCfg *params.ChainConfig
 
@@ -41,17 +39,16 @@ type BundleProposer struct {
 
 // NewBundleProposer creates a new BundleProposer instance.
 func NewBundleProposer(ctx context.Context, cfg *config.BundleProposerConfig, chainCfg *params.ChainConfig, db *gorm.DB, reg prometheus.Registerer) *BundleProposer {
-	log.Info("new bundle proposer", "bundleBatchesNum", cfg.MaxBatchNumPerBundle, "bundleTimeoutSec", cfg.BundleTimeoutSec)
+	log.Info("new bundle proposer", "bundleBatchesNum", cfg.BatchNumPerBundle)
 
 	p := &BundleProposer{
-		ctx:                  ctx,
-		db:                   db,
-		chunkOrm:             orm.NewChunk(db),
-		batchOrm:             orm.NewBatch(db),
-		bundleOrm:            orm.NewBundle(db),
-		maxBatchNumPerBundle: cfg.MaxBatchNumPerBundle,
-		bundleTimeoutSec:     cfg.BundleTimeoutSec,
-		chainCfg:             chainCfg,
+		ctx:               ctx,
+		db:                db,
+		chunkOrm:          orm.NewChunk(db),
+		batchOrm:          orm.NewBatch(db),
+		bundleOrm:         orm.NewBundle(db),
+		batchNumPerBundle: cfg.BatchNumPerBundle,
+		chainCfg:          chainCfg,
 
 		bundleProposerCircleTotal: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "rollup_propose_bundle_circle_total",
@@ -129,8 +126,8 @@ func (p *BundleProposer) proposeBundle() error {
 	}
 
 	// select at most maxBlocksThisChunk blocks
-	maxBatchesThisBundle := p.maxBatchNumPerBundle
-	batches, err := p.batchOrm.GetBatchesGEIndexGECodecVersion(p.ctx, firstUnbundledBatchIndex, encoding.CodecV3, int(maxBatchesThisBundle))
+	batchesThisBundle := p.batchNumPerBundle
+	batches, err := p.batchOrm.GetBatchesGEIndexGECodecVersion(p.ctx, firstUnbundledBatchIndex, encoding.CodecV3, int(batchesThisBundle))
 	if err != nil {
 		return err
 	}
@@ -161,21 +158,13 @@ func (p *BundleProposer) proposeBundle() error {
 		currentHardfork := encoding.GetHardforkName(p.chainCfg, chunk.StartBlockNumber, chunk.StartBlockTime)
 		if currentHardfork != hardforkName {
 			batches = batches[:i]
-			maxBatchesThisBundle = uint64(i) // update maxBlocksThisChunk to trigger chunking, because these blocks are the last blocks before the hardfork
+			batchesThisBundle = uint64(i) // update maxBlocksThisChunk to trigger chunking, because these blocks are the last blocks before the hardfork
 			break
 		}
 	}
 
-	if uint64(len(batches)) == maxBatchesThisBundle {
-		log.Info("reached maximum number of batches per bundle", "batch count", len(batches), "start batch index", batches[0].Index, "end batch index", batches[len(batches)-1].Index)
-		p.bundleFirstBlockTimeoutReached.Inc()
-		p.bundleBatchesNum.Set(float64(len(batches)))
-		return p.updateDBBundleInfo(batches, codecVersion)
-	}
-
-	currentTimeSec := uint64(time.Now().Unix())
-	if firstChunk.StartBlockTime+p.bundleTimeoutSec < currentTimeSec {
-		log.Info("first block timeout", "batch count", len(batches), "start block number", firstChunk.StartBlockNumber, "start block timestamp", firstChunk.StartBlockTime, "current time", currentTimeSec)
+	if uint64(len(batches)) == batchesThisBundle {
+		log.Info("reached number of batches per bundle", "batch count", len(batches), "start batch index", batches[0].Index, "end batch index", batches[len(batches)-1].Index)
 		p.bundleFirstBlockTimeoutReached.Inc()
 		p.bundleBatchesNum.Set(float64(len(batches)))
 		return p.updateDBBundleInfo(batches, codecVersion)

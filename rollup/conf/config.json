@@ -103,8 +103,7 @@
       "max_uncompressed_batch_bytes_size": 634880
     },
     "bundle_proposer_config": {
-      "max_batch_num_per_bundle": 20,
-      "bundle_timeout_sec": 36000
+      "batch_num_per_bundle": 20
     }
   },
   "db_config": {

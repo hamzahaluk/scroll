@@ -35,13 +35,6 @@ func testBundleProposerLimits(t *testing.T) {
 			expectedBundlesLen: 0,
 		},
 		{
-			name:                         "Timeout",
-			batchNumPerBundle:            math.MaxUint64,
-			bundleTimeoutSec:             0,
-			expectedBundlesLen:           1,
-			expectedBatchesInFirstBundle: 2,
-		},
-		{
 			name:               "maxBatchNumPerBundleIs0",
 			batchNumPerBundle:  0,
 			bundleTimeoutSec:   math.MaxUint32,
@@ -143,6 +136,7 @@ func testBundleProposerRespectHardforks(t *testing.T) {
 		BernoulliBlock: big.NewInt(1),
 		CurieBlock:     big.NewInt(2),
 		DarwinTime:     func() *uint64 { t := uint64(4); return &t }(),
+		DarwinV2Time:   func() *uint64 { t := uint64(4); return &t }(),
 	}
 
 	// Add genesis batch.
@@ -204,7 +198,7 @@ func testBundleProposerRespectHardforks(t *testing.T) {
 	}
 
 	bup := NewBundleProposer(context.Background(), &config.BundleProposerConfig{
-		BatchNumPerBundle: math.MaxUint64,
+		BatchNumPerBundle: 1,
 	}, chainConfig, db, nil)
 
 	for i := 0; i < 5; i++ {

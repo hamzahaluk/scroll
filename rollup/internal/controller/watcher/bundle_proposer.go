@@ -33,7 +33,6 @@ type BundleProposer struct {
 	proposeBundleUpdateInfoTotal        prometheus.Counter
 	proposeBundleUpdateInfoFailureTotal prometheus.Counter
 	bundleBatchesNum                    prometheus.Gauge
-	bundleFirstBlockTimeoutReached      prometheus.Counter
 	bundleBatchesProposeNotEnoughTotal  prometheus.Counter
 }
 
@@ -69,10 +68,6 @@ func NewBundleProposer(ctx context.Context, cfg *config.BundleProposerConfig, ch
 		bundleBatchesNum: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
 			Name: "rollup_propose_bundle_batches_number",
 			Help: "The number of batches in the current bundle.",
-		}),
-		bundleFirstBlockTimeoutReached: promauto.With(reg).NewCounter(prometheus.CounterOpts{
-			Name: "rollup_propose_bundle_first_block_timeout_reached_total",
-			Help: "Total times the first block in a bundle reached the timeout.",
 		}),
 		bundleBatchesProposeNotEnoughTotal: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "rollup_propose_bundle_batches_propose_not_enough_total",
@@ -125,7 +120,7 @@ func (p *BundleProposer) proposeBundle() error {
 		return err
 	}
 
-	// select at most maxBlocksThisChunk blocks
+	// select at most batchesThisBundle batches
 	batchesThisBundle := p.batchNumPerBundle
 	batches, err := p.batchOrm.GetBatchesGEIndexGECodecVersion(p.ctx, firstUnbundledBatchIndex, encoding.CodecV3, int(batchesThisBundle))
 	if err != nil {
@@ -158,14 +153,13 @@ func (p *BundleProposer) proposeBundle() error {
 		currentHardfork := encoding.GetHardforkName(p.chainCfg, chunk.StartBlockNumber, chunk.StartBlockTime)
 		if currentHardfork != hardforkName {
 			batches = batches[:i]
-			batchesThisBundle = uint64(i) // update maxBlocksThisChunk to trigger chunking, because these blocks are the last blocks before the hardfork
+			batchesThisBundle = uint64(i) // update batchesThisBundle as these are the last batches before the hardfork
 			break
 		}
 	}
 
 	if uint64(len(batches)) == batchesThisBundle {
-		log.Info("reached number of batches per bundle", "batch count", len(batches), "start batch index", batches[0].Index, "end batch index", batches[len(batches)-1].Index)
-		p.bundleFirstBlockTimeoutReached.Inc()
+		log.Info("bundle complete: reached target batch count", "batch count", len(batches), "start batch index", batches[0].Index, "end batch index", batches[len(batches)-1].Index)
 		p.bundleBatchesNum.Set(float64(len(batches)))
 		return p.updateDBBundleInfo(batches, codecVersion)
 	}

@@ -113,7 +113,7 @@ func testCommitBatchAndFinalizeBatchOrBundleWithAllCodecVersions(t *testing.T) {
 		}, chainConfig, db, nil)
 
 		bup := watcher.NewBundleProposer(context.Background(), &config.BundleProposerConfig{
-			BatchNumPerBundle: 1000000,
+			BatchNumPerBundle: 2,
 		}, chainConfig, db, nil)
 
 		l2BlockOrm := orm.NewL2Block(db)
@@ -279,7 +279,7 @@ func testCommitBatchAndFinalizeBatchOrBundleCrossingAllTransitions(t *testing.T)
 	}, chainConfig, db, nil)
 
 	bup := watcher.NewBundleProposer(context.Background(), &config.BundleProposerConfig{
-		BatchNumPerBundle: 1000000,
+		BatchNumPerBundle: 1,
 	}, chainConfig, db, nil)
 
 	cp.TryProposeChunk()

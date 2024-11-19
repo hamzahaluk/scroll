@@ -18,6 +18,7 @@ import (
 
 	"scroll-tech/common/database"
 	"scroll-tech/common/observability"
+	"scroll-tech/common/types"
 	"scroll-tech/common/utils"
 	"scroll-tech/common/version"
 	"scroll-tech/database/migrate"
@@ -54,6 +55,8 @@ func action(ctx *cli.Context) error {
 	subCtx, cancel := context.WithCancel(ctx.Context)
 	defer cancel()
 
+	// TODO: avoid resetting the DB if it already exists and has data latestFinalizedBatch+1 as a batch
+
 	db, err := initDB(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to init db: %w", err)
@@ -75,16 +78,15 @@ func action(ctx *cli.Context) error {
 
 	chunkProposer := watcher.NewChunkProposer(subCtx, cfg.L2Config.ChunkProposerConfig, genesis.Config, db, registry)
 	batchProposer := watcher.NewBatchProposer(subCtx, cfg.L2Config.BatchProposerConfig, genesis.Config, db, registry)
-	//bundleProposer := watcher.NewBundleProposer(subCtx, cfg.L2Config.BundleProposerConfig, genesis.Config, db, registry)
+	bundleProposer := watcher.NewBundleProposer(subCtx, cfg.L2Config.BundleProposerConfig, genesis.Config, db, registry)
 
 	fmt.Println(cfg.L1Config)
 	fmt.Println(cfg.L2Config)
 	fmt.Println(cfg.DBConfig)
 	fmt.Println(cfg.RecoveryConfig)
 
-	// TODO: also allow to skip this step and persist DB in case this crashes when waiting for proof?
 	// Restore minimal previous state required to be able to create new chunks, batches and bundles.
-	latestFinalizedChunk, latestFinalizedBatch, err := restoreMinimalPreviousState(cfg, chunkProposer, batchProposer)
+	latestFinalizedChunk, latestFinalizedBatch, latestFinalizedBundle, err := restoreMinimalPreviousState(cfg, db, chunkProposer, batchProposer, bundleProposer)
 	if err != nil {
 		return fmt.Errorf("failed to restore minimal previous state: %w", err)
 	}
@@ -133,11 +135,42 @@ func action(ctx *cli.Context) error {
 		return fmt.Errorf("failed to get latest latestFinalizedBatch: %w", err)
 	}
 
-	if latestBatch.EndChunkIndex != latestChunk.Index {
-		return fmt.Errorf("latest chunk in produced batch %d != %d, too many L2 blocks - specify less L2 blocks and retry again", latestBatch.EndChunkIndex, latestChunk.Index)
+	firstChunkInBatch, err := chunkProposer.ChunkORM().GetChunkByIndex(subCtx, latestBatch.EndChunkIndex)
+	if err != nil {
+		return fmt.Errorf("failed to get first chunk in batch: %w", err)
+	}
+	lastChunkInBatch, err := chunkProposer.ChunkORM().GetChunkByIndex(subCtx, latestBatch.EndChunkIndex)
+	if err != nil {
+		return fmt.Errorf("failed to get last chunk in batch: %w", err)
 	}
 
-	log.Info("Batch created", "index", latestBatch.Index, "hash", latestBatch.Hash, "StartChunkIndex", latestBatch.StartChunkIndex, "EndChunkIndex", latestBatch.EndChunkIndex)
+	// Make sure that the batch contains all previously created chunks and thus all blocks. If not the user will need to
+	// produce another batch (running the application again) starting from the end block of the last chunk in the batch + 1.
+	if latestBatch.EndChunkIndex != latestChunk.Index {
+		log.Warn("Produced batch does not contain all chunks and blocks. You'll need to produce another batch starting from end block+1.", "starting block", firstChunkInBatch.StartBlockNumber, "end block", lastChunkInBatch.EndBlockNumber, "latest block", latestChunk.EndBlockNumber)
+	}
+
+	log.Info("Batch created", "index", latestBatch.Index, "hash", latestBatch.Hash, "StartChunkIndex", latestBatch.StartChunkIndex, "EndChunkIndex", latestBatch.EndChunkIndex, "starting block", firstChunkInBatch.StartBlockNumber, "ending block", lastChunkInBatch.EndBlockNumber)
+
+	bundleProposer.TryProposeBundle()
+	latestBundle, err := bundleProposer.BundleORM().GetLatestBundle(subCtx)
+	if err != nil {
+		return fmt.Errorf("failed to get latest bundle: %w", err)
+	}
+
+	// Sanity check that the bundle was created correctly:
+	// 1. should be a new bundle
+	// 2. should only contain 1 batch, the one we created
+	if latestFinalizedBundle.Index == latestBundle.Index {
+		return fmt.Errorf("bundle was not created correctly")
+	}
+	if latestBundle.StartBatchIndex != latestBatch.Index || latestBundle.EndBatchIndex != latestBatch.Index {
+		return fmt.Errorf("bundle does not contain the correct batch: %d != %d", latestBundle.StartBatchIndex, latestBatch.Index)
+	}
+
+	log.Info("Bundle created", "index", latestBundle.Index, "hash", latestBundle.Hash, "StartBatchIndex", latestBundle.StartBatchIndex, "EndBatchIndex", latestBundle.EndBatchIndex, "starting block", firstChunkInBatch.StartBlockNumber, "ending block", lastChunkInBatch.EndBlockNumber)
+
+	log.Info("Waiting for proofs...")
 
 	// Catch CTRL-C to ensure a graceful shutdown.
 	interrupt := make(chan os.Signal, 1)
@@ -228,7 +261,7 @@ func fetchL2Blocks(ctx context.Context, cfg *config.Config, genesis *core.Genesi
 }
 
 // restoreMinimalPreviousState restores the minimal previous state required to be able to create new chunks, batches and bundles.
-func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer) (*orm.Chunk, *orm.Batch, error) {
+func restoreMinimalPreviousState(cfg *config.Config, db *gorm.DB, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer, bundleProposer *watcher.BundleProposer) (*orm.Chunk, *orm.Batch, *orm.Bundle, error) {
 	log.Info("Restoring previous state with", "L1 block height", cfg.RecoveryConfig.L1BlockHeight, "latest finalized batch", cfg.RecoveryConfig.LatestFinalizedBatch)
 
 	// TODO: make these parameters -> part of genesis config?
@@ -237,23 +270,23 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 
 	l1Client, err := ethclient.Dial(cfg.L1Config.Endpoint)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to L1 client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to connect to L1 client: %w", err)
 	}
 	reader, err := l1.NewReader(context.Background(), l1.Config{
 		ScrollChainAddress:    scrollChainAddress,
 		L1MessageQueueAddress: l1MessageQueueAddress,
 	}, l1Client)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create L1 reader: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create L1 reader: %w", err)
 	}
 
 	// 1. Sanity check user input: Make sure that the user's L1 block height is not higher than the latest finalized block number.
 	latestFinalizedL1Block, err := reader.GetLatestFinalizedBlockNumber()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get latest finalized L1 block number: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get latest finalized L1 block number: %w", err)
 	}
 	if cfg.RecoveryConfig.L1BlockHeight > latestFinalizedL1Block {
-		return nil, nil, fmt.Errorf("specified L1 block height is higher than the latest finalized block number: %d > %d", cfg.RecoveryConfig.L1BlockHeight, latestFinalizedL1Block)
+		return nil, nil, nil, fmt.Errorf("specified L1 block height is higher than the latest finalized block number: %d > %d", cfg.RecoveryConfig.L1BlockHeight, latestFinalizedL1Block)
 	}
 
 	log.Info("Latest finalized L1 block number", "latest finalized L1 block", latestFinalizedL1Block)
@@ -275,7 +308,7 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 		return true
 	})
 	if batchCommitEvent == nil {
-		return nil, nil, fmt.Errorf("commit event not found for batch %d", cfg.RecoveryConfig.LatestFinalizedBatch)
+		return nil, nil, nil, fmt.Errorf("commit event not found for batch %d", cfg.RecoveryConfig.LatestFinalizedBatch)
 	}
 
 	log.Info("Found commit event for batch", "batch", batchCommitEvent.BatchIndex(), "hash", batchCommitEvent.BatchHash(), "L1 block height", batchCommitEvent.BlockNumber(), "L1 tx hash", batchCommitEvent.TxHash())
@@ -283,17 +316,17 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 	// 3. Fetch commit tx data for latest finalized batch.
 	args, err := reader.FetchCommitTxData(batchCommitEvent)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch commit tx data: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to fetch commit tx data: %w", err)
 	}
 
 	codec, err := encoding.CodecFromVersion(encoding.CodecVersion(args.Version))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get codec: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get codec: %w", err)
 	}
 
 	daChunksRawTxs, err := codec.DecodeDAChunksRawTx(args.Chunks)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode DA chunks: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to decode DA chunks: %w", err)
 	}
 	lastChunk := daChunksRawTxs[len(daChunksRawTxs)-1]
 	lastBlockInBatch := lastChunk.Blocks[len(lastChunk.Blocks)-1].Number()
@@ -305,7 +338,7 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 	if cfg.RecoveryConfig.ForceL1MessageCount == 0 {
 		l1MessagesCount, err = reader.FinalizedL1MessageQueueIndex(latestFinalizedL1Block)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get L1 messages count: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to get L1 messages count: %w", err)
 		}
 	} else {
 		l1MessagesCount = cfg.RecoveryConfig.ForceL1MessageCount
@@ -316,17 +349,38 @@ func restoreMinimalPreviousState(cfg *config.Config, chunkProposer *watcher.Chun
 	// 5. Insert minimal state to DB.
 	chunk, err := chunkProposer.ChunkORM().InsertChunkRaw(context.Background(), codec.Version(), lastChunk, l1MessagesCount)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to insert chunk raw: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to insert chunk raw: %w", err)
 	}
 
 	log.Info("Inserted last finalized chunk to DB", "chunk", chunk.Index, "hash", chunk.Hash, "StartBlockNumber", chunk.StartBlockNumber, "EndBlockNumber", chunk.EndBlockNumber, "TotalL1MessagesPoppedBefore", chunk.TotalL1MessagesPoppedBefore)
 
 	batch, err := batchProposer.BatchORM().InsertBatchRaw(context.Background(), batchCommitEvent.BatchIndex(), batchCommitEvent.BatchHash(), codec.Version(), chunk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to insert batch raw: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to insert batch raw: %w", err)
 	}
 
 	log.Info("Inserted last finalized batch to DB", "batch", batch.Index, "hash", batch.Hash)
 
-	return chunk, batch, nil
+	var bundle *orm.Bundle
+	err = db.Transaction(func(dbTX *gorm.DB) error {
+		bundle, err = bundleProposer.BundleORM().InsertBundle(context.Background(), []*orm.Batch{batch}, encoding.CodecVersion(batch.CodecVersion), dbTX)
+		if err != nil {
+			return fmt.Errorf("failed to insert bundle: %w", err)
+		}
+		if err = bundleProposer.BundleORM().UpdateProvingStatus(context.Background(), bundle.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+			return fmt.Errorf("failed to update proving status: %w", err)
+		}
+		if err = bundleProposer.BundleORM().UpdateRollupStatus(context.Background(), bundle.Hash, types.RollupFinalized); err != nil {
+			return fmt.Errorf("failed to update rollup status: %w", err)
+		}
+
+		log.Info("Inserted last finalized bundle to DB", "bundle", bundle.Index, "hash", bundle.Hash, "StartBatchIndex", bundle.StartBatchIndex, "EndBatchIndex", bundle.EndBatchIndex)
+
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to insert bundle: %w", err)
+	}
+
+	return chunk, batch, bundle, nil
 }

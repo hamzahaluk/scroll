@@ -349,7 +349,7 @@ func (o *Batch) InsertBatchRaw(ctx context.Context, batchIndex *big.Int, batchHa
 		ProverAssignedAt:          nil,
 		ProvedAt:                  &now,
 		ProofTimeSec:              0,
-		RollupStatus:              0,
+		RollupStatus:              int16(types.RollupFinalized),
 		CommitTxHash:              "",
 		CommittedAt:               nil,
 		FinalizeTxHash:            "",

@@ -4,7 +4,7 @@ services:
   relayer:
     build:
       context: ../
-      dockerfile: permissionless-batches/recovery_permissionless_batches.Dockerfile
+      dockerfile: build/dockerfiles/recovery_permissionless_batches.Dockerfile
     container_name: permissionless-batches-relayer
     volumes:
       - ./conf/relayer:/app/conf
@@ -46,30 +46,58 @@ services:
       retries: 10
       start_period: 5m
 
+  coordinator-cron:
+    build:
+      context: ../
+      dockerfile: build/dockerfiles/coordinator-cron.Dockerfile
+    volumes:
+      - ./conf/coordinator/:/app/conf
+    command: "--config /app/conf/config.json --verbosity 3"
+    depends_on:
+      db:
+        condition: service_healthy
+
+
   proving-service-chunk:
-    image: scrolltech/sdk-cloud-prover:sindri-v0.0.4
+    image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
     platform: linux/amd64
     command: "--config /app/config.json"
     environment:
           PROVER_NAME_PREFIX: "sindri_chunk"
           CIRCUIT_TYPE: 1 # 1 for chunk proving
-          RUST_BACKTRACE: 1
+          N_WORKERS: 1
     volumes:
-      - ./conf/proving-service/chunk/:/app/keys
+      - ./conf/proving-service/chunk/:/app/
       - ./conf/proving-service/config.json:/app/config.json
     depends_on:
       coordinator:
         condition: service_healthy
 
   proving-service-batch:
-    image: scrolltech/sdk-cloud-prover:sindri-v0.0.4
+    image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
     platform: linux/amd64
     command: "--config /app/config.json"
     environment:
       PROVER_NAME_PREFIX: "sindri_batch"
-      CIRCUIT_TYPE: 2 # 2 for chunk proving
+      CIRCUIT_TYPE: 2 # 2 for batch proving
+      N_WORKERS: 1
     volumes:
-      - ./conf/proving-service/batch/:/app/keys
+      - ./conf/proving-service/batch/:/app
+      - ./conf/proving-service/config.json:/app/config.json
+    depends_on:
+      coordinator:
+        condition: service_healthy
+
+  proving-service-bundle:
+    image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
+    platform: linux/amd64
+    command: "--config /app/config.json"
+    environment:
+      PROVER_NAME_PREFIX: "sindri_bundle"
+      CIRCUIT_TYPE: 3 # 3 for bundle proving
+      N_WORKERS: 1
+    volumes:
+      - ./conf/proving-service/bundle/:/app
       - ./conf/proving-service/config.json:/app/config.json
     depends_on:
       coordinator:

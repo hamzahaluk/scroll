@@ -60,10 +60,6 @@ func NewL2WatcherClient(ctx context.Context, client *ethclient.Client, confirmat
 
 const blocksFetchLimit = uint64(10)
 
-func (w *L2WatcherClient) BlockORM() *orm.L2Block {
-	return w.l2BlockOrm
-}
-
 // TryFetchRunningMissingBlocks attempts to fetch and store block traces for any missing blocks.
 func (w *L2WatcherClient) TryFetchRunningMissingBlocks(blockHeight uint64) error {
 	w.metrics.fetchRunningMissingBlocksTotal.Inc()

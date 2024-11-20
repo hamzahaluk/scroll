@@ -18,6 +18,11 @@ import (
 	"scroll-tech/rollup/internal/orm"
 )
 
+const (
+	defaultRestoredChunkIndex  uint64 = 1337
+	defaultRestoredBundleIndex uint64 = 1
+)
+
 type Recovery struct {
 	ctx       context.Context
 	cfg       *config.Config
@@ -49,9 +54,32 @@ func NewRecovery(ctx context.Context, cfg *config.Config, genesis *core.Genesis,
 	}
 }
 
-// TODO: check if recovery is needed by looking at DB and expected chunks/batches/bundles.
 func (r *Recovery) RecoveryNeeded() bool {
-	return true
+	chunk, err := r.chunkORM.GetLatestChunk(r.ctx)
+	if err != nil {
+		return true
+	}
+	if chunk.Index <= defaultRestoredChunkIndex {
+		return true
+	}
+
+	batch, err := r.batchORM.GetLatestBatch(r.ctx)
+	if err != nil {
+		return true
+	}
+	if batch.Index <= r.cfg.RecoveryConfig.LatestFinalizedBatch {
+		return true
+	}
+
+	bundle, err := r.bundleORM.GetLatestBundle(r.ctx)
+	if err != nil {
+		return true
+	}
+	if bundle.Index <= defaultRestoredBundleIndex {
+		return true
+	}
+
+	return false
 }
 
 func (r *Recovery) Run() error {
@@ -61,13 +89,13 @@ func (r *Recovery) Run() error {
 	}
 
 	// Restore minimal previous state required to be able to create new chunks, batches and bundles.
-	latestFinalizedChunk, latestFinalizedBatch, latestFinalizedBundle, err := r.restoreMinimalPreviousState()
+	restoredFinalizedChunk, restoredFinalizedBatch, restoredFinalizedBundle, err := r.restoreMinimalPreviousState()
 	if err != nil {
 		return fmt.Errorf("failed to restore minimal previous state: %w", err)
 	}
 
 	// Fetch and insert the missing blocks from the last block in the latestFinalizedBatch to the latest L2 block.
-	fromBlock := latestFinalizedChunk.EndBlockNumber + 1
+	fromBlock := restoredFinalizedChunk.EndBlockNumber + 1
 	toBlock, err := r.fetchL2Blocks(fromBlock, r.cfg.RecoveryConfig.L2BlockHeightLimit)
 	if err != nil {
 		return fmt.Errorf("failed to fetch L2 blocks: %w", err)
@@ -100,7 +128,7 @@ func (r *Recovery) Run() error {
 	log.Info("Chunks created", "count", count, "latest latestFinalizedChunk", latestChunk.Index, "hash", latestChunk.Hash, "StartBlockNumber", latestChunk.StartBlockNumber, "EndBlockNumber", latestChunk.EndBlockNumber, "TotalL1MessagesPoppedBefore", latestChunk.TotalL1MessagesPoppedBefore)
 
 	// Create batch for the created chunks. We only allow 1 batch it needs to be submitted (and finalized) with a proof in a single step.
-	log.Info("Creating batch for chunks", "from", latestFinalizedChunk.Index+1, "to", latestChunk.Index)
+	log.Info("Creating batch for chunks", "from", restoredFinalizedChunk.Index+1, "to", latestChunk.Index)
 
 	r.batchProposer.TryProposeBatch()
 	latestBatch, err := r.batchORM.GetLatestBatch(r.ctx)
@@ -111,8 +139,8 @@ func (r *Recovery) Run() error {
 	// Sanity check that the batch was created correctly:
 	// 1. should be a new batch
 	// 2. should contain all chunks created
-	if latestFinalizedBatch.Index != latestBatch.Index {
-		return fmt.Errorf("batch was not created correctly, expected %d but got %d", latestFinalizedBatch.Index+1, latestBatch.Index)
+	if restoredFinalizedBatch.Index+1 != latestBatch.Index {
+		return fmt.Errorf("batch was not created correctly, expected %d but got %d", restoredFinalizedBatch.Index+1, latestBatch.Index)
 	}
 
 	firstChunkInBatch, err := r.chunkORM.GetChunkByIndex(r.ctx, latestBatch.EndChunkIndex)
@@ -141,7 +169,7 @@ func (r *Recovery) Run() error {
 	// Sanity check that the bundle was created correctly:
 	// 1. should be a new bundle
 	// 2. should only contain 1 batch, the one we created
-	if latestFinalizedBundle.Index == latestBundle.Index {
+	if restoredFinalizedBundle.Index == latestBundle.Index {
 		return fmt.Errorf("bundle was not created correctly")
 	}
 	if latestBundle.StartBatchIndex != latestBatch.Index || latestBundle.EndBatchIndex != latestBatch.Index {
@@ -240,7 +268,7 @@ func (r *Recovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch, *orm.B
 	log.Info("L1 messages count after latest finalized batch", "batch", batchCommitEvent.BatchIndex(), "count", l1MessagesCount)
 
 	// 5. Insert minimal state to DB.
-	chunk, err := r.chunkORM.InsertChunkRaw(r.ctx, codec.Version(), lastChunk, l1MessagesCount)
+	chunk, err := r.chunkORM.InsertChunkRaw(r.ctx, defaultRestoredChunkIndex, codec.Version(), lastChunk, l1MessagesCount)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to insert chunk raw: %w", err)
 	}

@@ -95,6 +95,7 @@ func action(ctx *cli.Context) error {
 		}
 		log.Info("Success! You're ready to generate proofs!")
 	} else {
+		// TODO: implement batch submission if proofs are available
 		log.Info("TODO: Batch submission")
 	}
 

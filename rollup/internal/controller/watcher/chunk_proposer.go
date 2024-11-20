@@ -174,10 +174,6 @@ func (p *ChunkProposer) TryProposeChunk() {
 	}
 }
 
-func (p *ChunkProposer) ChunkORM() *orm.Chunk {
-	return p.chunkOrm
-}
-
 func (p *ChunkProposer) updateDBChunkInfo(chunk *encoding.Chunk, codecVersion encoding.CodecVersion, metrics *utils.ChunkMetrics) error {
 	if chunk == nil {
 		return nil

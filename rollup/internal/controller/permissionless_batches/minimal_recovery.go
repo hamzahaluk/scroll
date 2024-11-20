@@ -23,7 +23,7 @@ const (
 	defaultRestoredBundleIndex uint64 = 1
 )
 
-type Recovery struct {
+type MinimalRecovery struct {
 	ctx       context.Context
 	cfg       *config.Config
 	genesis   *core.Genesis
@@ -38,8 +38,8 @@ type Recovery struct {
 	l2Watcher      *watcher.L2WatcherClient
 }
 
-func NewRecovery(ctx context.Context, cfg *config.Config, genesis *core.Genesis, db *gorm.DB, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer, bundleProposer *watcher.BundleProposer, l2Watcher *watcher.L2WatcherClient) *Recovery {
-	return &Recovery{
+func NewRecovery(ctx context.Context, cfg *config.Config, genesis *core.Genesis, db *gorm.DB, chunkProposer *watcher.ChunkProposer, batchProposer *watcher.BatchProposer, bundleProposer *watcher.BundleProposer, l2Watcher *watcher.L2WatcherClient) *MinimalRecovery {
+	return &MinimalRecovery{
 		ctx:            ctx,
 		cfg:            cfg,
 		genesis:        genesis,
@@ -54,7 +54,7 @@ func NewRecovery(ctx context.Context, cfg *config.Config, genesis *core.Genesis,
 	}
 }
 
-func (r *Recovery) RecoveryNeeded() bool {
+func (r *MinimalRecovery) RecoveryNeeded() bool {
 	chunk, err := r.chunkORM.GetLatestChunk(r.ctx)
 	if err != nil {
 		return true
@@ -82,7 +82,7 @@ func (r *Recovery) RecoveryNeeded() bool {
 	return false
 }
 
-func (r *Recovery) Run() error {
+func (r *MinimalRecovery) Run() error {
 	// Make sure we start from a clean state.
 	if err := r.resetDB(); err != nil {
 		return fmt.Errorf("failed to reset DB: %w", err)
@@ -182,7 +182,7 @@ func (r *Recovery) Run() error {
 }
 
 // restoreMinimalPreviousState restores the minimal previous state required to be able to create new chunks, batches and bundles.
-func (r *Recovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch, *orm.Bundle, error) {
+func (r *MinimalRecovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch, *orm.Bundle, error) {
 	log.Info("Restoring previous state with", "L1 block height", r.cfg.RecoveryConfig.L1BlockHeight, "latest finalized batch", r.cfg.RecoveryConfig.LatestFinalizedBatch)
 
 	l1Client, err := ethclient.Dial(r.cfg.L1Config.Endpoint)
@@ -306,7 +306,7 @@ func (r *Recovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch, *orm.B
 	return chunk, batch, bundle, nil
 }
 
-func (r *Recovery) fetchL2Blocks(fromBlock uint64, l2BlockHeightLimit uint64) (uint64, error) {
+func (r *MinimalRecovery) fetchL2Blocks(fromBlock uint64, l2BlockHeightLimit uint64) (uint64, error) {
 	if l2BlockHeightLimit > 0 && fromBlock > l2BlockHeightLimit {
 		return 0, fmt.Errorf("fromBlock (latest finalized L2 block) is higher than specified L2BlockHeightLimit: %d > %d", fromBlock, l2BlockHeightLimit)
 	}
@@ -340,7 +340,7 @@ func (r *Recovery) fetchL2Blocks(fromBlock uint64, l2BlockHeightLimit uint64) (u
 	return toBlock, nil
 }
 
-func (r *Recovery) resetDB() error {
+func (r *MinimalRecovery) resetDB() error {
 	sqlDB, err := r.db.DB()
 	if err != nil {
 		return fmt.Errorf("failed to get db connection: %w", err)

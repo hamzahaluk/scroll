@@ -1,7 +1,7 @@
 name: permissionless-batches
 
 services:
-  relayer:
+  relayer-batch-production:
     build:
       context: ../
       dockerfile: build/dockerfiles/recovery_permissionless_batches.Dockerfile
@@ -9,6 +9,8 @@ services:
     volumes:
       - ./conf/relayer:/app/conf
     command: "--config /app/conf/config.json"
+    profiles:
+      - batch-production-submission
     depends_on:
       db:
         condition: service_healthy
@@ -36,6 +38,8 @@ services:
     volumes:
       - ./conf/coordinator/:/app/conf
     command: "--config /app/conf/config.json --http.port 8390 --verbosity 5"
+    profiles:
+      - proving
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +57,8 @@ services:
     volumes:
       - ./conf/coordinator/:/app/conf
     command: "--config /app/conf/config.json --verbosity 3"
+    profiles:
+      - proving
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +68,8 @@ services:
     image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
     platform: linux/amd64
     command: "--config /app/config.json"
+    profiles:
+      - proving
     environment:
           PROVER_NAME_PREFIX: "sindri_chunk"
           CIRCUIT_TYPE: 1 # 1 for chunk proving
@@ -77,6 +85,8 @@ services:
     image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
     platform: linux/amd64
     command: "--config /app/config.json"
+    profiles:
+      - proving
     environment:
       PROVER_NAME_PREFIX: "sindri_batch"
       CIRCUIT_TYPE: 2 # 2 for batch proving
@@ -92,6 +102,8 @@ services:
     image: scrolltech/sdk-cloud-prover:sindri-v0.0.5
     platform: linux/amd64
     command: "--config /app/config.json"
+    profiles:
+      - proving
     environment:
       PROVER_NAME_PREFIX: "sindri_bundle"
       CIRCUIT_TYPE: 3 # 3 for bundle proving

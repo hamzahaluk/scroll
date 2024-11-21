@@ -422,7 +422,7 @@ func (o *Batch) UpdateRollupStatusCommitAndFinalizeTxHash(ctx context.Context, h
 	updateFields["commit_tx_hash"] = commitTxHash
 	updateFields["committed_at"] = utils.NowUTC()
 	updateFields["finalize_tx_hash"] = finalizeTxHash
-	updateFields["finalized_at"] = time.Now()
+	updateFields["finalized_at"] = utils.NowUTC()
 
 	updateFields["rollup_status"] = int(status)
 

@@ -204,7 +204,6 @@ func (o *Chunk) InsertChunk(ctx context.Context, chunk *encoding.Chunk, codecVer
 		parentChunkStateRoot = parentChunk.StateRoot
 	}
 
-	fmt.Println("insertChunk", totalL1MessagePoppedBefore, chunkIndex, parentChunkHash)
 	chunkHash, err := utils.GetChunkHash(chunk, totalL1MessagePoppedBefore, codecVersion)
 	if err != nil {
 		log.Error("failed to get chunk hash", "err", err)

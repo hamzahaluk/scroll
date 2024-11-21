@@ -64,14 +64,10 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 	log.Info("Restoring full previous state with", "L1 block height", f.cfg.RecoveryConfig.L1BlockHeight, "latest finalized batch", f.cfg.RecoveryConfig.LatestFinalizedBatch)
 
 	// 1. Get latest finalized batch stored in DB
-	latestDBBatch, err := f.batchORM.GetLatestBatch(context.Background())
+	latestDBBatch, err := f.batchORM.GetLatestBatch(f.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest batch from DB: %w", err)
 	}
-
-	// TODO:
-	//  1. what if it is a fresh start? -> latest batch is nil
-	//latestDBBatch.CommitTxHash
 
 	log.Info("Latest finalized batch in DB", "batch", latestDBBatch.Index, "hash", latestDBBatch.Hash)
 
@@ -84,23 +80,21 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 	log.Info("Latest finalized L1 block number", "latest finalized L1 block", latestFinalizedL1Block)
 
 	// 3. Get latest finalized batch from contract (at latest finalized L1 block)
-	latestFinalizedBatch, err := f.l1Reader.LatestFinalizedBatch(latestFinalizedL1Block)
+	latestFinalizedBatchContract, err := f.l1Reader.LatestFinalizedBatch(latestFinalizedL1Block)
 	if err != nil {
 		return fmt.Errorf("failed to get latest finalized batch: %w", err)
 	}
 
-	// TODO: remove this, just for debugging
-	latestFinalizedBatch = 82310
-	log.Info("Latest finalized batch from L1 contract", "latest finalized batch", latestFinalizedBatch, "at latest finalized L1 block", latestFinalizedL1Block)
+	log.Info("Latest finalized batch from L1 contract", "latest finalized batch", latestFinalizedBatchContract, "at latest finalized L1 block", latestFinalizedL1Block)
 
 	// 4. Get batches one by one from stored in DB to latest finalized batch.
-	receipt, err := f.l1Client.TransactionReceipt(context.Background(), common.HexToHash(latestDBBatch.CommitTxHash))
+	receipt, err := f.l1Client.TransactionReceipt(f.ctx, common.HexToHash(latestDBBatch.CommitTxHash))
 	if err != nil {
 		return fmt.Errorf("failed to get transaction receipt of latest DB batch finalization transaction: %w", err)
 	}
 	fromBlock := receipt.BlockNumber.Uint64()
 
-	log.Info("Fetching rollup events from L1", "from block", fromBlock, "to block", latestFinalizedL1Block, "from batch", latestDBBatch.Index, "to batch", latestFinalizedBatch)
+	log.Info("Fetching rollup events from L1", "from block", fromBlock, "to block", latestFinalizedL1Block, "from batch", latestDBBatch.Index, "to batch", latestFinalizedBatchContract)
 
 	commitsHeapMap := common.NewHeapMap[uint64, *l1.CommitBatchEvent](func(event *l1.CommitBatchEvent) uint64 {
 		return event.BatchIndex().Uint64()
@@ -113,8 +107,6 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 		if event.BatchIndex().Uint64() <= latestDBBatch.Index {
 			return true
 		}
-
-		fmt.Println("event", event.Type(), event.BatchIndex().Uint64())
 
 		switch event.Type() {
 		case l1.CommitEventType:
@@ -142,7 +134,7 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 			bundles = append(bundles, bundle)
 
 			// Stop fetching rollup events if we reached the latest finalized batch.
-			if finalizeEvent.BatchIndex().Uint64() >= latestFinalizedBatch {
+			if finalizeEvent.BatchIndex().Uint64() >= latestFinalizedBatchContract {
 				return false
 			}
 
@@ -173,7 +165,7 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 		var lastBatchInBundle *orm.Batch
 
 		for _, batch := range bundle {
-			dbBatch, err := f.batchORM.GetBatchByIndex(context.Background(), batch.commit.BatchIndex().Uint64())
+			dbBatch, err := f.batchORM.GetBatchByIndex(f.ctx, batch.commit.BatchIndex().Uint64())
 			if err != nil {
 				return fmt.Errorf("failed to get batch by index for bundle generation: %w", err)
 			}
@@ -191,19 +183,19 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 		}
 
 		err = f.db.Transaction(func(dbTX *gorm.DB) error {
-			newBundle, err := f.bundleORM.InsertBundle(context.Background(), dbBatches, encoding.CodecVersion(lastBatchInBundle.CodecVersion), dbTX)
+			newBundle, err := f.bundleORM.InsertBundle(f.ctx, dbBatches, encoding.CodecVersion(lastBatchInBundle.CodecVersion), dbTX)
 			if err != nil {
 				return fmt.Errorf("failed to insert bundle to DB: %w", err)
 			}
-			if err = f.batchORM.UpdateBundleHashInRange(context.Background(), newBundle.StartBatchIndex, newBundle.EndBatchIndex, newBundle.Hash, dbTX); err != nil {
+			if err = f.batchORM.UpdateBundleHashInRange(f.ctx, newBundle.StartBatchIndex, newBundle.EndBatchIndex, newBundle.Hash, dbTX); err != nil {
 				return fmt.Errorf("failed to update bundle_hash %s for batches (%d to %d): %w", newBundle.Hash, newBundle.StartBatchIndex, newBundle.EndBatchIndex, err)
 			}
 
-			if err = f.bundleORM.UpdateFinalizeTxHashAndRollupStatus(context.Background(), newBundle.Hash, lastBatchInBundle.FinalizeTxHash, types.RollupFinalized, dbTX); err != nil {
+			if err = f.bundleORM.UpdateFinalizeTxHashAndRollupStatus(f.ctx, newBundle.Hash, lastBatchInBundle.FinalizeTxHash, types.RollupFinalized, dbTX); err != nil {
 				return fmt.Errorf("failed to update finalize tx hash and rollup status for bundle %s: %w", newBundle.Hash, err)
 			}
 
-			if err = f.bundleORM.UpdateProvingStatus(context.Background(), newBundle.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+			if err = f.bundleORM.UpdateProvingStatus(f.ctx, newBundle.Hash, types.ProvingTaskVerified, dbTX); err != nil {
 				return fmt.Errorf("failed to update proving status for bundle %s: %w", newBundle.Hash, err)
 			}
 
@@ -254,7 +246,7 @@ func (f *FullRecovery) processFinalizedBatch(nextBatch *batchEvents) error {
 		start := daChunkRawTxs.Blocks[0].Number()
 		end := daChunkRawTxs.Blocks[len(daChunkRawTxs.Blocks)-1].Number()
 
-		blocks, err := f.blockORM.GetL2BlocksInRange(context.Background(), start, end)
+		blocks, err := f.blockORM.GetL2BlocksInRange(f.ctx, start, end)
 		if err != nil {
 			return fmt.Errorf("failed to get L2 blocks in range: %w", err)
 		}
@@ -272,20 +264,22 @@ func (f *FullRecovery) processFinalizedBatch(nextBatch *batchEvents) error {
 		}
 
 		err = f.db.Transaction(func(dbTX *gorm.DB) error {
-			dbChunk, err := f.chunkORM.InsertChunk(context.Background(), &chunk, codec.Version(), *metrics, dbTX)
+			dbChunk, err := f.chunkORM.InsertChunk(f.ctx, &chunk, codec.Version(), *metrics, dbTX)
 			if err != nil {
 				return fmt.Errorf("failed to insert chunk to DB: %w", err)
 			}
-			if err := f.blockORM.UpdateChunkHashInRange(context.Background(), dbChunk.StartBlockNumber, dbChunk.EndBlockNumber, dbChunk.Hash, dbTX); err != nil {
+			if err := f.blockORM.UpdateChunkHashInRange(f.ctx, dbChunk.StartBlockNumber, dbChunk.EndBlockNumber, dbChunk.Hash, dbTX); err != nil {
 				return fmt.Errorf("failed to update chunk_hash for l2_blocks (chunk hash: %s, start block: %d, end block: %d): %w", dbChunk.Hash, dbChunk.StartBlockNumber, dbChunk.EndBlockNumber, err)
 			}
 
-			if err = f.chunkORM.UpdateProvingStatus(context.Background(), dbChunk.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+			if err = f.chunkORM.UpdateProvingStatus(f.ctx, dbChunk.Hash, types.ProvingTaskVerified, dbTX); err != nil {
 				return fmt.Errorf("failed to update proving status for chunk %s: %w", dbChunk.Hash, err)
 			}
 
 			daChunks = append(daChunks, &chunk)
 			dbChunks = append(dbChunks, dbChunk)
+
+			log.Info("Inserted chunk", "index", dbChunk.Index, "hash", dbChunk.Hash, "start block", dbChunk.StartBlockNumber, "end block", dbChunk.EndBlockNumber)
 
 			return nil
 		})
@@ -295,7 +289,7 @@ func (f *FullRecovery) processFinalizedBatch(nextBatch *batchEvents) error {
 	}
 
 	// 5.4 Reproduce batch.
-	dbParentBatch, err := f.batchORM.GetLatestBatch(context.Background())
+	dbParentBatch, err := f.batchORM.GetLatestBatch(f.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest batch from DB: %w", err)
 	}
@@ -315,20 +309,22 @@ func (f *FullRecovery) processFinalizedBatch(nextBatch *batchEvents) error {
 	}
 
 	err = f.db.Transaction(func(dbTX *gorm.DB) error {
-		dbBatch, err := f.batchORM.InsertBatch(context.Background(), &batch, codec.Version(), *metrics, dbTX)
+		dbBatch, err := f.batchORM.InsertBatch(f.ctx, &batch, codec.Version(), *metrics, dbTX)
 		if err != nil {
 			return fmt.Errorf("failed to insert batch to DB: %w", err)
 		}
-		if err = f.chunkORM.UpdateBatchHashInRange(context.Background(), dbBatch.StartChunkIndex, dbBatch.EndChunkIndex, dbBatch.Hash, dbTX); err != nil {
+		if err = f.chunkORM.UpdateBatchHashInRange(f.ctx, dbBatch.StartChunkIndex, dbBatch.EndChunkIndex, dbBatch.Hash, dbTX); err != nil {
 			return fmt.Errorf("failed to update batch_hash for chunks (batch hash: %s, start chunk: %d, end chunk: %d): %w", dbBatch.Hash, dbBatch.StartChunkIndex, dbBatch.EndChunkIndex, err)
 		}
 
-		if err = f.batchORM.UpdateProvingStatus(context.Background(), dbBatch.Hash, types.ProvingTaskVerified, dbTX); err != nil {
+		if err = f.batchORM.UpdateProvingStatus(f.ctx, dbBatch.Hash, types.ProvingTaskVerified, dbTX); err != nil {
 			return fmt.Errorf("failed to update proving status for batch %s: %w", dbBatch.Hash, err)
 		}
-		if err = f.batchORM.UpdateRollupStatusCommitAndFinalizeTxHash(context.Background(), dbBatch.Hash, types.RollupFinalized, nextBatch.commit.TxHash().Hex(), nextBatch.finalize.TxHash().Hex(), dbTX); err != nil {
+		if err = f.batchORM.UpdateRollupStatusCommitAndFinalizeTxHash(f.ctx, dbBatch.Hash, types.RollupFinalized, nextBatch.commit.TxHash().Hex(), nextBatch.finalize.TxHash().Hex(), dbTX); err != nil {
 			return fmt.Errorf("failed to update rollup status for batch %s: %w", dbBatch.Hash, err)
 		}
+
+		log.Info("Inserted batch", "index", dbBatch.Index, "hash", dbBatch.Hash, "start chunk", dbBatch.StartChunkIndex, "end chunk", dbBatch.EndChunkIndex)
 
 		return nil
 	})

@@ -19,7 +19,9 @@ import (
 )
 
 const (
-	defaultRestoredChunkIndex  uint64 = 1337
+	// defaultRestoredChunkIndex is the default index of the last restored fake chunk. It is used to be able to generate new chunks pretending that we have already processed some chunks.
+	defaultRestoredChunkIndex uint64 = 1337
+	// defaultRestoredBundleIndex is the default index of the last restored fake bundle. It is used to be able to generate new bundles pretending that we have already processed some bundles.
 	defaultRestoredBundleIndex uint64 = 1
 )
 
@@ -219,17 +221,20 @@ func (r *MinimalRecovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch,
 		}
 	}
 
+	// Find the commit event for the latest finalized batch.
 	var batchCommitEvent *l1.CommitBatchEvent
 	err = reader.FetchRollupEventsInRangeWithCallback(r.cfg.RecoveryConfig.L1BlockHeight, latestFinalizedL1Block, func(event l1.RollupEvent) bool {
-		if event.Type() == l1.CommitEventType && event.BatchIndex().Uint64() == r.cfg.RecoveryConfig.LatestFinalizedBatch {
+		if event.Type() == l1.CommitEventType && event.BatchIndex().Uint64() == latestFinalizedBatch {
 			batchCommitEvent = event.(*l1.CommitBatchEvent)
+			// We found the commit event for the batch, stop searching.
 			return false
 		}
 
+		// Continue until we find the commit event for the batch.
 		return true
 	})
 	if batchCommitEvent == nil {
-		return nil, nil, nil, fmt.Errorf("commit event not found for batch %d", r.cfg.RecoveryConfig.LatestFinalizedBatch)
+		return nil, nil, nil, fmt.Errorf("commit event not found for batch %d", latestFinalizedBatch)
 	}
 
 	log.Info("Found commit event for batch", "batch", batchCommitEvent.BatchIndex(), "hash", batchCommitEvent.BatchHash(), "L1 block height", batchCommitEvent.BlockNumber(), "L1 tx hash", batchCommitEvent.TxHash())

@@ -7,7 +7,8 @@ services:
       dockerfile: build/dockerfiles/recovery_permissionless_batches.Dockerfile
     container_name: permissionless-batches-relayer
     volumes:
-      - ./conf/relayer:/app/conf
+      - ./conf/relayer/config.json:/app/conf/config.json
+      - ./conf/genesis.json:/app/conf/genesis.json
     command: "--config /app/conf/config.json"
     profiles:
       - batch-production-submission
@@ -36,7 +37,8 @@ services:
       context: ../
       dockerfile: build/dockerfiles/coordinator-api.Dockerfile
     volumes:
-      - ./conf/coordinator/:/app/conf
+      - ./conf/coordinator/config.json:/app/conf/config.json
+      - ./conf/genesis.json:/app/conf/genesis.json
     command: "--config /app/conf/config.json --http.port 8390 --verbosity 5"
     profiles:
       - proving

@@ -1,0 +1,38 @@
+{
+  "prover_manager": {
+    "provers_per_session": 1,
+    "session_attempts": 5,
+    "bundle_collection_time_sec": 3600,
+    "batch_collection_time_sec": 3600,
+    "chunk_collection_time_sec": 3600,
+    "verifier": {
+      "mock_mode": false,
+      "low_version_circuit": {
+        "params_path": "./conf/params",
+        "assets_path": "./conf/assets",
+        "fork_name": "darwinV2",
+        "min_prover_version": "v4.4.55"
+      },
+      "high_version_circuit": {
+        "params_path": "./conf/params",
+        "assets_path": "./conf/assets",
+        "fork_name": "darwinV2",
+        "min_prover_version": "v4.4.56"
+      }
+    }
+  },
+  "db": {
+    "driver_name": "postgres",
+    "dsn": "postgres://db/scroll?sslmode=disable&user=postgres",
+    "maxOpenNum": 200,
+    "maxIdleNum": 20
+  },
+  "l2": {
+    "chain_id": 111
+  },
+  "auth": {
+    "secret": "prover secret key",
+    "challenge_expire_duration_sec": 3600,
+    "login_expire_duration_sec": 3600
+  }
+}

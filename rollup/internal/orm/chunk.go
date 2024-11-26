@@ -256,7 +256,7 @@ func (o *Chunk) InsertChunk(ctx context.Context, chunk *encoding.Chunk, codecVer
 	return &newChunk, nil
 }
 
-func (o *Chunk) InsertChunkRaw(ctx context.Context, index uint64, codecVersion encoding.CodecVersion, chunk *encoding.DAChunkRawTx, totalL1MessagePoppedBefore uint64) (*Chunk, error) {
+func (o *Chunk) InsertPermissionlessChunk(ctx context.Context, index uint64, codecVersion encoding.CodecVersion, chunk *encoding.DAChunkRawTx, totalL1MessagePoppedBefore uint64) (*Chunk, error) {
 	// Create some unique identifier. It is not really used for anything except in DB.
 	var chunkBytes []byte
 	for _, block := range chunk.Blocks {
@@ -268,28 +268,21 @@ func (o *Chunk) InsertChunkRaw(ctx context.Context, index uint64, codecVersion e
 	numBlocks := len(chunk.Blocks)
 	emptyHash := common.Hash{}.Hex()
 	newChunk := &Chunk{
-		Index:                        index,
-		Hash:                         hash.Hex(),
-		StartBlockNumber:             chunk.Blocks[0].Number(),
-		StartBlockHash:               emptyHash,
-		EndBlockNumber:               chunk.Blocks[numBlocks-1].Number(),
-		EndBlockHash:                 emptyHash,
-		TotalL2TxGas:                 0,
-		TotalL2TxNum:                 0,
-		TotalL1CommitCalldataSize:    0,
-		TotalL1CommitGas:             0,
-		StartBlockTime:               chunk.Blocks[0].Timestamp(),
-		TotalL1MessagesPoppedBefore:  totalL1MessagePoppedBefore,
-		TotalL1MessagesPoppedInChunk: 0,
-		ParentChunkHash:              emptyHash,
-		StateRoot:                    emptyHash,
-		ParentChunkStateRoot:         emptyHash,
-		WithdrawRoot:                 emptyHash,
-		CodecVersion:                 int16(codecVersion),
-		EnableCompress:               false,
-		ProvingStatus:                int16(types.ProvingTaskVerified),
-		CrcMax:                       0,
-		BlobSize:                     0,
+		Index:                       index,
+		Hash:                        hash.Hex(),
+		StartBlockNumber:            chunk.Blocks[0].Number(),
+		StartBlockHash:              emptyHash,
+		EndBlockNumber:              chunk.Blocks[numBlocks-1].Number(),
+		EndBlockHash:                emptyHash,
+		StartBlockTime:              chunk.Blocks[0].Timestamp(),
+		TotalL1MessagesPoppedBefore: totalL1MessagePoppedBefore,
+		ParentChunkHash:             emptyHash,
+		StateRoot:                   emptyHash,
+		ParentChunkStateRoot:        emptyHash,
+		WithdrawRoot:                emptyHash,
+		CodecVersion:                int16(codecVersion),
+		EnableCompress:              false,
+		ProvingStatus:               int16(types.ProvingTaskVerified),
 	}
 
 	db := o.db.WithContext(ctx)

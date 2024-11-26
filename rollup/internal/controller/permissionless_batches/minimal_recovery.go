@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	// defaultRestoredChunkIndex is the default index of the last restored fake chunk. It is used to be able to generate new chunks pretending that we have already processed some chunks.
-	defaultRestoredChunkIndex uint64 = 1337
-	// defaultRestoredBundleIndex is the default index of the last restored fake bundle. It is used to be able to generate new bundles pretending that we have already processed some bundles.
-	defaultRestoredBundleIndex uint64 = 1
+	// defaultFakeRestoredChunkIndex is the default index of the last restored fake chunk. It is used to be able to generate new chunks pretending that we have already processed some chunks.
+	defaultFakeRestoredChunkIndex uint64 = 1337
+	// defaultFakeRestoredBundleIndex is the default index of the last restored fake bundle. It is used to be able to generate new bundles pretending that we have already processed some bundles.
+	defaultFakeRestoredBundleIndex uint64 = 1
 )
 
 type MinimalRecovery struct {
@@ -61,7 +61,7 @@ func (r *MinimalRecovery) RecoveryNeeded() bool {
 	if err != nil {
 		return true
 	}
-	if chunk.Index <= defaultRestoredChunkIndex {
+	if chunk.Index <= defaultFakeRestoredChunkIndex {
 		return true
 	}
 
@@ -77,7 +77,7 @@ func (r *MinimalRecovery) RecoveryNeeded() bool {
 	if err != nil {
 		return true
 	}
-	if bundle.Index <= defaultRestoredBundleIndex {
+	if bundle.Index <= defaultFakeRestoredBundleIndex {
 		return true
 	}
 
@@ -273,14 +273,14 @@ func (r *MinimalRecovery) restoreMinimalPreviousState() (*orm.Chunk, *orm.Batch,
 	log.Info("L1 messages count after latest finalized batch", "batch", batchCommitEvent.BatchIndex(), "count", l1MessagesCount)
 
 	// 5. Insert minimal state to DB.
-	chunk, err := r.chunkORM.InsertChunkRaw(r.ctx, defaultRestoredChunkIndex, codec.Version(), lastChunk, l1MessagesCount)
+	chunk, err := r.chunkORM.InsertPermissionlessChunk(r.ctx, defaultFakeRestoredChunkIndex, codec.Version(), lastChunk, l1MessagesCount)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to insert chunk raw: %w", err)
 	}
 
 	log.Info("Inserted last finalized chunk to DB", "chunk", chunk.Index, "hash", chunk.Hash, "StartBlockNumber", chunk.StartBlockNumber, "EndBlockNumber", chunk.EndBlockNumber, "TotalL1MessagesPoppedBefore", chunk.TotalL1MessagesPoppedBefore)
 
-	batch, err := r.batchORM.InsertBatchRaw(r.ctx, batchCommitEvent.BatchIndex(), batchCommitEvent.BatchHash(), codec.Version(), chunk)
+	batch, err := r.batchORM.InsertPermissionlessBatch(r.ctx, batchCommitEvent.BatchIndex(), batchCommitEvent.BatchHash(), codec.Version(), chunk)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to insert batch raw: %w", err)
 	}

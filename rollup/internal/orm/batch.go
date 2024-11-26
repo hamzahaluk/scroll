@@ -326,48 +326,29 @@ func (o *Batch) InsertBatch(ctx context.Context, batch *encoding.Batch, codecVer
 	return &newBatch, nil
 }
 
-func (o *Batch) InsertBatchRaw(ctx context.Context, batchIndex *big.Int, batchHash common.Hash, codecVersion encoding.CodecVersion, chunk *Chunk) (*Batch, error) {
+func (o *Batch) InsertPermissionlessBatch(ctx context.Context, batchIndex *big.Int, batchHash common.Hash, codecVersion encoding.CodecVersion, chunk *Chunk) (*Batch, error) {
 	now := time.Now()
 	newBatch := &Batch{
-		Index:                     batchIndex.Uint64(),
-		Hash:                      batchHash.Hex(),
-		DataHash:                  "",
-		StartChunkIndex:           chunk.Index,
-		StartChunkHash:            chunk.Hash,
-		EndChunkIndex:             chunk.Index,
-		EndChunkHash:              chunk.Hash,
-		StateRoot:                 "",
-		WithdrawRoot:              "",
-		ParentBatchHash:           "",
-		BatchHeader:               []byte{1, 2, 3},
-		CodecVersion:              int16(codecVersion),
-		EnableCompress:            false,
-		BlobBytes:                 nil,
-		ChunkProofsStatus:         0,
-		ProvingStatus:             int16(types.ProvingTaskVerified),
-		Proof:                     nil,
-		ProverAssignedAt:          nil,
-		ProvedAt:                  &now,
-		ProofTimeSec:              0,
-		RollupStatus:              int16(types.RollupFinalized),
-		CommitTxHash:              "",
-		CommittedAt:               nil,
-		FinalizeTxHash:            "",
-		FinalizedAt:               &now,
-		OracleStatus:              0,
-		OracleTxHash:              "",
-		BlobDataProof:             nil,
-		BlobSize:                  0,
-		BundleHash:                "",
-		TotalL1CommitGas:          0,
-		TotalL1CommitCalldataSize: 0,
+		Index:           batchIndex.Uint64(),
+		Hash:            batchHash.Hex(),
+		StartChunkIndex: chunk.Index,
+		StartChunkHash:  chunk.Hash,
+		EndChunkIndex:   chunk.Index,
+		EndChunkHash:    chunk.Hash,
+		BatchHeader:     []byte{1, 2, 3},
+		CodecVersion:    int16(codecVersion),
+		EnableCompress:  false,
+		ProvingStatus:   int16(types.ProvingTaskVerified),
+		ProvedAt:        &now,
+		RollupStatus:    int16(types.RollupFinalized),
+		FinalizedAt:     &now,
 	}
 
 	db := o.db.WithContext(ctx)
 	db = db.Model(&Batch{})
 
 	if err := db.Create(newBatch).Error; err != nil {
-		return nil, fmt.Errorf("Batch.InsertBatchRaw error: %w", err)
+		return nil, fmt.Errorf("Batch.InsertPermissionlessBatch error: %w", err)
 	}
 
 	return newBatch, nil

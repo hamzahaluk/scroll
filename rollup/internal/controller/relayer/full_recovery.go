@@ -61,7 +61,7 @@ func NewFullRecovery(ctx context.Context, cfg *config.Config, genesis *core.Gene
 // The DB state should be clean: the latest batch in the DB should be finalized on L1. This function will
 // restore all batches between the latest finalized batch in the DB and the latest finalized batch on L1.
 func (f *FullRecovery) RestoreFullPreviousState() error {
-	log.Info("Restoring full previous state with", "L1 block height", f.cfg.RecoveryConfig.L1BlockHeight, "latest finalized batch", f.cfg.RecoveryConfig.LatestFinalizedBatch)
+	log.Info("Restoring full previous state")
 
 	// 1. Get latest finalized batch stored in DB
 	latestDBBatch, err := f.batchORM.GetLatestBatch(f.ctx)
@@ -204,8 +204,6 @@ func (f *FullRecovery) RestoreFullPreviousState() error {
 		if err != nil {
 			return fmt.Errorf("failed to insert bundle in DB transaction: %w", err)
 		}
-
-		fmt.Println("bundle", len(bundle), bundle[0].commit.BatchIndex())
 	}
 
 	return nil

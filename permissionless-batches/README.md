@@ -14,7 +14,7 @@ The batch production toolkit is a set of tools that allow anyone to submit a bat
 2. l2geth block production
 3. production, proving and submission of batch with `docker-compose.yml`
 
-### Pre-requisites
+### Prerequisites
 - Unix-like OS, 32GB RAM
 - Docker
 - [l2geth](https://github.com/scroll-tech/go-ethereum/) or [Docker image](https://hub.docker.com/r/scrolltech/l2geth) of corresponding version [TODO link list with versions](#batch-production-toolkit).
@@ -49,7 +49,7 @@ Running l2geth in recovery mode requires following configuration:
 
 ### 2. l2geth block production
 After the state is recovered, the next step is to produce blocks on L2. This is done by running l2geth in block production mode.
-As a pre-requisite, the state recovery must be completed and the latest state of the L2 chain must be available.
+As a prerequisite, the state recovery must be completed and the latest state of the L2 chain must be available.
 
 You also need to generate a keystore e.g. with [Clef](https://geth.ethereum.org/docs/fundamentals/account-management) to be able to sign blocks. 
 This key is not used for any funds, but required for block production to work. Once you generated blocks you can safely discard it.
@@ -108,14 +108,54 @@ TODO
 
 
 ## Operator recovery
-- l2geth recovery with sign blocks and relayer recovery
+Operator recovery needs to be run by the rollup operator to resume normal rollup operation after permissionless batch mode is deactivated. It consists of two main components:
+1. l2geth recovery
+2. Relayer recovery
 
-### Pre-requisites
+These steps are required to resume permissioned batch submission and the valid L2 chain. They will restore the entire history of the batches submitted during permissionless mode. 
+
+### Prerequisites
+- l2geth with the latest state of the L2 chain (before permissionless mode was activated)
+- signer key for the sequencer according to Clique consensus
+- relayer and coordinator are set up, running and up-to-date with the latest state of the L2 chain (before permissionless mode was activated)
 
 ### l2geth recovery
+Running l2geth in recovery mode requires following configuration:
+- `--scroll` or `--scroll-sepolia` - enables Scroll Mainnet or Sepolia mode
+- `--da.blob.beaconnode` - L1 RPC beacon node
+- `--l1.endpoint` - L1 RPC execution client
+- `--da.sync=true` - enables syncing with L1
+- `--da.recovery` - enables recovery mode
+- `--da.recovery.signblocks` - enables signing blocks with the sequencer and configured key
+- `--da.recovery.initiall1block` - initial L1 block (commit tx of initial batch)
+- `--da.recovery.initialbatch` - batch where to start recovery from. Can be found on [Scrollscan Explorer](https://scrollscan.com/batches).
+- `--da.recovery.l2endblock` - until which L2 block recovery should run (optional)
 
-### Relayer
-
+```bash
+./build/bin/geth --scroll<-sepolia> \
+--datadir "tmp/datadir" \
+--gcmode archive \
+--http --http.addr "0.0.0.0" --http.port 8545 --http.api "eth,net,web3,debug,scroll" --http.vhosts "*" \
+--da.blob.beaconnode "<L1 RPC beacon node>" \
+--l1.endpoint "<L1 RPC execution client>" \
+--da.sync=true --da.recovery --da.recovery.signblocks --da.recovery.initiall1block "<initial L1 block (commit tx of initial batch)>" --da.recovery.initialbatch "<batch where to start recovery from>" --da.recovery.l2endblock "<until which L2 block recovery should run (optional)>" \
+--verbosity 3
 ```
-l2_config.endpoint
+
+After the recovery is finished, start the sequencer in normal operation and continue issuing L2 blocks as normal. This will resume the L2 chain, allow the relayer (after running recovery) to create new batches and allow other L2 follower nodes to sync up the valid and signed L2 chain.
+
+### Relayer recovery
+Start the relayer with the following additional top-level configuration:
+```
+  "recovery_config": {
+    "enable": true
+  }
+```
+
+This will make the relayer recover all the chunks, batches and bundles that were submitted during permissionless mode. These batches are marked automatically as proven and finalized.
+Once this process is finished, start the relayer normally without the recovery config to resume normal operation.
+```
+  "recovery_config": {
+    "enable": false
+  }
 ```
